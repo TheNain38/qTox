@@ -58,7 +58,7 @@ ChatMessage::Ptr ChatMessage::createChatMessage(const QString &sender, const QSt
     {
     case ACTION:
         senderText = "*";
-        text = wrapDiv(QString("%1 %2").arg(sender, text), "action");
+        text = wrapDiv(QString("%1 %2").arg(sender.toHtmlEscaped(), text), "action");
         msg->setAsAction();
         break;
     case ALERT:
@@ -186,6 +186,7 @@ QString ChatMessage::detectAnchors(const QString &str)
                 "\\w+\\S+)" // any other character, lets domains and other
                 "|(?:\\b)(file:///.*$)" //link to a local file, valid until the end of the line
                 "|(?:\\b)(tox:[a-zA-Z\\d]{76}$)" //link with full user address
+                "|(?:\\b)(mailto:\\S+@\\S+\\.\\S+)" //@mail link
                 "|(?:\\b)(tox:\\S+@\\S+)"); // starts with `tox` then : and only alpha-digits till the end
                 // also accepts tox:agilob@net as simplified TOX ID
     //support for multi-line text
@@ -204,10 +205,12 @@ QString ChatMessage::detectAnchors(const QString &str)
                 offset += url.length();
                 continue;
             }
+            QString htmledUrl;
             // add scheme if not specified
             if (exp.cap(2) == "www.")
-                url.prepend("http://");
-            QString htmledUrl = QString("<a href=\"%1\">%1</a>").arg(url);
+                htmledUrl = QString("<a href=\"http://%1\">%1</a>").arg(url);
+            else
+                htmledUrl = QString("<a href=\"%1\">%1</a>").arg(url);
             out.replace(offset, exp.cap().length(), htmledUrl);
             offset += htmledUrl.length();
         }

@@ -341,7 +341,16 @@ void Widget::init()
     //restore window state
     restoreGeometry(Settings::getInstance().getWindowGeometry());
     restoreState(Settings::getInstance().getWindowState());
-    ui->mainSplitter->restoreState(Settings::getInstance().getSplitterState());
+    if (!ui->mainSplitter->restoreState(Settings::getInstance().getSplitterState()))
+    {
+        // Set the status panel (friendlist) to a reasonnable width by default/on first start
+        constexpr int spWidthPc = 33;
+        ui->mainSplitter->resize(size());
+        QList<int> sizes = ui->mainSplitter->sizes();
+        sizes[0] = ui->mainSplitter->width()*spWidthPc/100;
+        sizes[1] = ui->mainSplitter->width() - sizes[0];
+        ui->mainSplitter->setSizes(sizes);
+    }
 
     connect(settingsWidget, &SettingsWidget::compactToggled, contactListWidget, &FriendListWidget::onCompactChanged);
     connect(settingsWidget, &SettingsWidget::groupchatPositionToggled, contactListWidget, &FriendListWidget::onGroupchatPositionChanged);
@@ -449,6 +458,16 @@ Widget* Widget::getInstance()
         instance = new Widget();
 
     return instance;
+}
+
+void Widget::moveEvent(QMoveEvent *event)
+{
+    if (event->type() == QEvent::Move)
+    {
+        saveWindowGeometry();
+        saveSplitterGeometry();
+    }
+    QWidget::moveEvent(event);
 }
 
 void Widget::closeEvent(QCloseEvent *event)
@@ -793,8 +812,17 @@ void Widget::onUsernameChanged(const QString& newUsername, const QString& oldUse
 
 void Widget::setUsername(const QString& username)
 {
-    ui->nameLabel->setText(username);
-    ui->nameLabel->setToolTip(username);    // for overlength names
+    if (username.isEmpty())
+    {
+        ui->nameLabel->setText(tr("Your name"));
+        ui->nameLabel->setToolTip(tr("Your name"));
+    }
+    else
+    {
+        ui->nameLabel->setText(username);
+        ui->nameLabel->setToolTip(username.toHtmlEscaped());    // for overlength names
+    }
+
     QString sanename = username;
     sanename.remove(QRegExp("[\\t\\n\\v\\f\\r\\x0000]"));
              nameMention = QRegExp("\\b" + QRegExp::escape(username) + "\\b", Qt::CaseInsensitive);
@@ -809,8 +837,16 @@ void Widget::onStatusMessageChanged(const QString& newStatusMessage)
 
 void Widget::setStatusMessage(const QString &statusMessage)
 {
-    ui->statusLabel->setText(statusMessage);
-    ui->statusLabel->setToolTip(statusMessage); // for overlength messsages
+    if (statusMessage.isEmpty())
+    {
+        ui->statusLabel->setText(tr("Your status"));
+        ui->statusLabel->setToolTip(tr("Your status"));
+    }
+    else
+    {
+        ui->statusLabel->setText(statusMessage);
+        ui->statusLabel->setToolTip(statusMessage.toHtmlEscaped()); // for overlength messsages
+    }
 }
 
 void Widget::reloadHistory()
@@ -1408,7 +1444,7 @@ void Widget::onGroupInviteReceived(int32_t friendId, uint8_t type, QByteArray in
 {
     if (type == TOX_GROUPCHAT_TYPE_TEXT || type == TOX_GROUPCHAT_TYPE_AV)
     {
-        if (GUI::askQuestion(tr("Group invite", "popup title"), tr("%1 has invited you to a groupchat. Would you like to join?", "popup text").arg(Nexus::getCore()->getFriendUsername(friendId)), true, false))
+        if (GUI::askQuestion(tr("Group invite", "popup title"), tr("%1 has invited you to a groupchat. Would you like to join?", "popup text").arg(Nexus::getCore()->getFriendUsername(friendId).toHtmlEscaped()), true, false))
         {
             int groupId = Nexus::getCore()->joinGroupchat(friendId, type, (uint8_t*)invite.data(), invite.length());
             if (groupId < 0)
@@ -2015,10 +2051,10 @@ void Widget::setActiveToolMenuButton(ActiveToolMenuButton newActiveButton)
 
 void Widget::retranslateUi()
 {
-    QString name = ui->nameLabel->text(), status = ui->statusLabel->text();
+    Core* core = Nexus::getCore();
     ui->retranslateUi(this);
-    ui->nameLabel->setText(name);
-    ui->statusLabel->setText(status);
+    setUsername(core->getUsername());
+    setStatusMessage(core->getStatusMessage());
 
     filterDisplayName->setText(tr("By Name"));
     filterDisplayActivity->setText(tr("By Activity"));

@@ -34,8 +34,8 @@
 #include "toolboxgraphicsitem.h"
 #include "src/widget/widget.h"
 
-ScreenshotGrabber::ScreenshotGrabber(QWidget* parent)
-    : QWidget(parent)
+ScreenshotGrabber::ScreenshotGrabber(QObject* parent)
+    : QObject(parent)
 {
     scene = new QGraphicsScene;
     window = new QGraphicsView (scene); // Top-level widget
@@ -66,7 +66,7 @@ bool ScreenshotGrabber::eventFilter(QObject* object, QEvent* event)
     if (event->type() == QEvent::KeyPress)
         return handleKeyPress(static_cast<QKeyEvent*>(event));
 
-    return QWidget::eventFilter(object, event);
+    return QObject::eventFilter(object, event);
 }
 
 void ScreenshotGrabber::showGrabber()
@@ -76,7 +76,14 @@ void ScreenshotGrabber::showGrabber()
     this->window->show();
     this->window->setFocus();
     this->window->grabKeyboard();
-    adjustWindowSize();
+
+    QRect fullGrabbedRect = screenGrab.rect();
+    QRect rec = QApplication::primaryScreen()->virtualGeometry();
+
+    this->window->setGeometry(rec);
+    this->scene->setSceneRect(fullGrabbedRect);
+    this->overlay->setRect(fullGrabbedRect);
+
     adjustTooltipPosition();
 }
 
@@ -97,7 +104,7 @@ bool ScreenshotGrabber::handleKeyPress(QKeyEvent* event)
         this->window->setVisible(false);
         this->window->resetCachedContent();
         // Give the window manager a moment to hide windows
-        QTimer::singleShot(200, this, SLOT(reInit()));
+        QTimer::singleShot(350, this, SLOT(reInit()));
 
     }
     else
@@ -174,14 +181,20 @@ void ScreenshotGrabber::chooseHelperTooltipText(QRect rect)
         useRegionSelectedTooltip();
 }
 
+/**
+ * @internal
+ *
+ * Align the tooltip centred at top of screen with the mouse cursor.
+ */
 void ScreenshotGrabber::adjustTooltipPosition()
 {
-    QRectF size = this->helperToolbox->childrenBoundingRect();
-    QRect screenRect = QApplication::desktop()->screen()->rect();
-
-    // Align the toolbox center-top.
-    helperToolbox->setX(screenRect.x() + (screenRect.width() - size.width() + size.x()) / 2);
-    helperToolbox->setY(screenRect.y());
+    QRect recGL = QGuiApplication::primaryScreen()->virtualGeometry();
+    QRect rec = qApp->desktop()->screenGeometry(QCursor::pos());
+    const QRectF ttRect = this->helperToolbox->childrenBoundingRect();
+    int x = abs(recGL.x()) + rec.x() + ((rec.width() - ttRect.width()) / 2);
+    int y = abs(recGL.y()) + rec.y();
+    helperToolbox->setX(x);
+    helperToolbox->setY(y);
 }
 
 void ScreenshotGrabber::reject()
@@ -191,28 +204,15 @@ void ScreenshotGrabber::reject()
     Widget::getInstance()->setVisible(true); // show window if it was hidden
 }
 
-QRect ScreenshotGrabber::getSystemScreenRect()
-{
-    return QApplication::primaryScreen()->virtualGeometry();
-}
-
-void ScreenshotGrabber::adjustWindowSize()
-{
-    QRect systemScreenRect = getSystemScreenRect();
-    qDebug() << "adjusting grabber size to" << systemScreenRect;
-
-    this->window->setGeometry(systemScreenRect);
-    this->window->scene()->setSceneRect(systemScreenRect);
-    this->overlay->setRect(systemScreenRect);
-}
-
 QPixmap ScreenshotGrabber::grabScreen()
 {
-    QScreen* screen = QApplication::primaryScreen();
-    if (screen)
-        return screen->grabWindow(0);
-
-    return QPixmap();
+    QScreen* screen = QGuiApplication::primaryScreen();
+    QRect rec = screen->virtualGeometry();
+    return screen->grabWindow(QApplication::desktop()->winId(),
+                              rec.x(),
+                              rec.y(),
+                              rec.width(),
+                              rec.height());
 }
 
 void ScreenshotGrabber::beginRectChooser(QGraphicsSceneMouseEvent* event)
