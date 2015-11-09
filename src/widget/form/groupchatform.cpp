@@ -25,10 +25,12 @@
 #include "src/widget/tool/croppinglabel.h"
 #include "src/widget/maskablepixmapwidget.h"
 #include "src/core/core.h"
+#include "src/core/coreav.h"
 #include "src/widget/style.h"
 #include "src/persistence/historykeeper.h"
 #include "src/widget/flowlayout.h"
 #include "src/widget/translator.h"
+#include "src/video/groupnetcamview.h"
 #include <QDebug>
 #include <QTimer>
 #include <QPushButton>
@@ -195,7 +197,14 @@ void GroupChatForm::onUserListChanged()
         orderizer[names[i]] = peerLabels[i];
         if (group->isSelfPeerNumber(i))
             peerLabels[i]->setStyleSheet("QLabel {color : green;}");
+
+        if (netcam && !group->isSelfPeerNumber(i))
+            static_cast<GroupNetCamView*>(netcam)->addPeer(i, names[i]);
     }
+
+    if (netcam)
+        static_cast<GroupNetCamView*>(netcam)->clearPeers();
+
     // now alphabetize and add to layout
     names.sort(Qt::CaseInsensitive);
     for (unsigned i=0; i<nNames; ++i)
@@ -231,9 +240,24 @@ void GroupChatForm::peerAudioPlaying(int peer)
     {
         peerAudioTimers[peer] = new QTimer(this);
         peerAudioTimers[peer]->setSingleShot(true);
-        connect(peerAudioTimers[peer], &QTimer::timeout, [=]{this->peerLabels[peer]->setStyleSheet("");
-                                                             delete this->peerAudioTimers[peer];
-                                                             this->peerAudioTimers[peer] = nullptr;});
+        connect(peerAudioTimers[peer], &QTimer::timeout, [this, peer]
+        {
+            if (netcam)
+                static_cast<GroupNetCamView*>(netcam)->removePeer(peer);
+
+            if (peer >= peerLabels.size())
+                return;
+
+            peerLabels[peer]->setStyleSheet("");
+            delete peerAudioTimers[peer];
+            peerAudioTimers[peer] = nullptr;
+        });
+
+        if (netcam)
+        {
+            static_cast<GroupNetCamView*>(netcam)->removePeer(peer);
+            static_cast<GroupNetCamView*>(netcam)->addPeer(peer, group->getPeerList()[peer]);
+        }
     }
     peerAudioTimers[peer]->start(500);
 }
@@ -259,13 +283,13 @@ void GroupChatForm::onMicMuteToggle()
     {
         if (micButton->objectName() == "red")
         {
-            Core::getInstance()->enableGroupCallMic(group->getGroupId());
+            Core::getInstance()->getAv()->enableGroupCallMic(group->getGroupId());
             micButton->setObjectName("green");
             micButton->setToolTip(tr("Mute microphone"));
         }
         else
         {
-            Core::getInstance()->disableGroupCallMic(group->getGroupId());
+            Core::getInstance()->getAv()->disableGroupCallMic(group->getGroupId());
             micButton->setObjectName("red");
             micButton->setToolTip(tr("Unmute microphone"));
         }
@@ -280,13 +304,13 @@ void GroupChatForm::onVolMuteToggle()
     {
         if (volButton->objectName() == "red")
         {
-            Core::getInstance()->enableGroupCallVol(group->getGroupId());
+            Core::getInstance()->getAv()->enableGroupCallVol(group->getGroupId());
             volButton->setObjectName("green");
             volButton->setToolTip(tr("Mute call"));
         }
         else
         {
-            Core::getInstance()->disableGroupCallVol(group->getGroupId());
+            Core::getInstance()->getAv()->disableGroupCallVol(group->getGroupId());
             volButton->setObjectName("red");
             volButton->setToolTip(tr("Unmute call"));
         }
@@ -299,7 +323,7 @@ void GroupChatForm::onCallClicked()
 {
     if (!inCall)
     {
-        Core::getInstance()->joinGroupCall(group->getGroupId());
+        Core::getInstance()->getAv()->joinGroupCall(group->getGroupId());
         audioInputFlag = true;
         audioOutputFlag = true;
         callButton->setObjectName("red");
@@ -312,10 +336,11 @@ void GroupChatForm::onCallClicked()
         volButton->style()->polish(volButton);
         volButton->setToolTip(tr("Mute call"));
         inCall = true;
+        showNetcam();
     }
     else
     {
-        Core::getInstance()->leaveGroupCall(group->getGroupId());
+        Core::getInstance()->getAv()->leaveGroupCall(group->getGroupId());
         audioInputFlag = false;
         audioOutputFlag = false;
         callButton->setObjectName("green");
@@ -328,7 +353,22 @@ void GroupChatForm::onCallClicked()
         volButton->style()->polish(volButton);
         volButton->setToolTip("");
         inCall = false;
+        hideNetcam();
     }
+}
+
+GenericNetCamView *GroupChatForm::createNetcam()
+{
+    GroupNetCamView* view = new GroupNetCamView(group->getGroupId(), this);
+
+    QStringList names = group->getPeerList();
+    for (int i = 0; i<names.size(); ++i)
+    {
+        if (!group->isSelfPeerNumber(i))
+            static_cast<GroupNetCamView*>(view)->addPeer(i, names[i]);
+    }
+
+    return view;
 }
 
 void GroupChatForm::keyPressEvent(QKeyEvent* ev)
@@ -336,10 +376,9 @@ void GroupChatForm::keyPressEvent(QKeyEvent* ev)
     // Push to talk (CTRL+P)
     if (ev->key() == Qt::Key_P && (ev->modifiers() & Qt::ControlModifier) && inCall)
     {
-        Core* core = Core::getInstance();
-        if (!core->isGroupCallMicEnabled(group->getGroupId()))
+        if (!Core::getInstance()->getAv()->isGroupCallMicEnabled(group->getGroupId()))
         {
-            core->enableGroupCallMic(group->getGroupId());
+            Core::getInstance()->getAv()->enableGroupCallMic(group->getGroupId());
             micButton->setObjectName("green");
             micButton->style()->polish(micButton);
             Style::repolish(micButton);
@@ -355,10 +394,9 @@ void GroupChatForm::keyReleaseEvent(QKeyEvent* ev)
     // Push to talk (CTRL+P)
     if (ev->key() == Qt::Key_P && (ev->modifiers() & Qt::ControlModifier) && inCall)
     {
-        Core* core = Core::getInstance();
-        if (core->isGroupCallMicEnabled(group->getGroupId()))
+        if (Core::getInstance()->getAv()->isGroupCallMicEnabled(group->getGroupId()))
         {
-            core->disableGroupCallMic(group->getGroupId());
+            Core::getInstance()->getAv()->disableGroupCallMic(group->getGroupId());
             micButton->setObjectName("red");
             micButton->style()->polish(micButton);
             Style::repolish(micButton);

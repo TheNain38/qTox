@@ -1,5 +1,5 @@
 /*
-    Copyright © 2014 by The qTox Project
+    Copyright © 2014-2015 by The qTox Project
 
     This file is part of qTox, a Qt-based graphical interface for Tox.
 
@@ -20,19 +20,20 @@
 #ifndef NETCAMVIEW_H
 #define NETCAMVIEW_H
 
-#include <QWidget>
+#include "genericnetcamview.h"
 
 class QHBoxLayout;
 struct vpx_image;
-class VideoSurface;
 class VideoSource;
+class QFrame;
+class MovableWidget;
 
-class NetCamView : public QWidget
+class NetCamView : public GenericNetCamView
 {
     Q_OBJECT
 
 public:
-    NetCamView(QWidget *parent=0);
+    NetCamView(int friendId, QWidget *parent=0);
 
     virtual void show(VideoSource* source, const QString& title);
     virtual void hide();
@@ -40,9 +41,19 @@ public:
     void setSource(VideoSource* s);
     void setTitle(const QString& title);
 
+protected:
+    void showEvent(QShowEvent* event) final override;
+
+private slots:
+    void updateRatio();
+
 private:
-    QHBoxLayout* mainLayout;
-    VideoSurface* videoSurface;
+    void updateFrameSize(QSize size);
+
+    VideoSurface* selfVideoSurface;
+    MovableWidget* selfFrame;
+    int friendId;
+    bool e = false;
 };
 
 #endif // NETCAMVIEW_H

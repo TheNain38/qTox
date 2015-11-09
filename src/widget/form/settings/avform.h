@@ -52,18 +52,17 @@ private:
     void retranslateUi();
 
 private slots:
-    void on_videoModescomboBox_currentIndexChanged(int index);
 
     // audio
-    void onInDevChanged(const QString& deviceDescriptor);
-    void onOutDevChanged(const QString& deviceDescriptor);
+    void onInDevChanged(QString deviceDescriptor);
+    void onOutDevChanged(QString deviceDescriptor);
     void onFilterAudioToggled(bool filterAudio);
-    void on_playbackSlider_valueChanged(int value);
-    void on_microphoneSlider_valueChanged(int value);
+    void onPlaybackValueChanged(int value);
+    void onMicrophoneValueChanged(int value);
 
     // camera
     void onVideoDevChanged(int index);
-    void onResProbingFinished(QList<QSize> res);
+    void onVideoModesIndexChanged(int index);
 
     virtual void hideEvent(QHideEvent*) final override;
     virtual void showEvent(QShowEvent*) final override;
@@ -74,8 +73,8 @@ protected:
 
 private:
     Ui::AVSettings *bodyUI;
-    VideoSurface* camVideoSurface;
-    CameraSource& camera;
+    VideoSurface *camVideoSurface;
+    CameraSource &camera;
     QVector<QPair<QString, QString>> videoDeviceList;
     QVector<VideoMode> videoModes;
 };

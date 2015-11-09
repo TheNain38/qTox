@@ -23,7 +23,9 @@
 
 #include <QObject>
 #include <QHash>
+#include <QMutexLocker>
 #include <atomic>
+#include <cmath>
 
 #if defined(__APPLE__) && defined(__MACH__)
  #include <OpenAL/al.h>
@@ -41,34 +43,48 @@ class QMutex;
 struct Tox;
 class AudioFilterer;
 
-class Audio : QObject
+// Public default audio settings
+static constexpr uint32_t AUDIO_SAMPLE_RATE = 48000; ///< The next best Opus would take is 24k
+static constexpr uint32_t AUDIO_FRAME_DURATION = 20; ///< In milliseconds
+static constexpr uint32_t AUDIO_FRAME_SAMPLE_COUNT = AUDIO_FRAME_DURATION * AUDIO_SAMPLE_RATE/1000;
+static constexpr uint32_t AUDIO_CHANNELS = 2; ///< Ideally, we'd auto-detect, but that's a sane default
+
+class Audio : public QObject
 {
     Q_OBJECT
 
 public:
-    static Audio& getInstance(); ///< Returns the singleton's instance. Will construct on first call.
+    static Audio& getInstance();
 
-    static float getOutputVolume(); ///< Returns the current output volume, between 0 and 1
-    static void setOutputVolume(float volume); ///< The volume must be between 0 and 1
+public:
+    void startAudioThread();
 
-    static void suscribeInput(); ///< Call when you need to capture sound from the open input device.
-    static void unsuscribeInput(); ///< Call once you don't need to capture on the open input device anymore.
+    qreal getOutputVolume();
+    void setOutputVolume(qreal volume);
 
-    static void openInput(const QString& inDevDescr); ///< Open an input device, use before suscribing
-    static void openOutput(const QString& outDevDescr); ///< Open an output device
+    void setInputVolume(qreal volume);
 
-    static void closeInput(); ///< Close an input device, please don't use unless everyone's unsuscribed
-    static void closeOutput(); ///< Close an output device
+    void subscribeInput();
+    void unsubscribeInput();
+    void openInput(const QString& inDevDescr);
+    bool openOutput(const QString& outDevDescr);
 
-    static bool isInputReady(); ///< Returns true if the input device is open and suscribed to
-    static bool isOutputClosed(); ///< Returns true if the output device is open
+    bool isInputReady();
+    bool isInputSubscribed();
+    bool isOutputReady();
 
-    static void playMono16Sound(const QByteArray& data); ///< Play a 44100Hz mono 16bit PCM sound
-    static bool tryCaptureSamples(uint8_t* buf, int framesize); ///< Does nothing and return false on failure
+    static void createSource(ALuint* source);
+    static void deleteSource(ALuint* source);
 
-    /// May be called from any thread, will always queue a call to playGroupAudio
-    /// The first and last argument are ignored, but allow direct compatibility with toxcore
-    static void playGroupAudioQueued(Tox*, int group, int peer, const int16_t* data,
+    void startLoop();
+    void stopLoop();
+    void playMono16Sound(const QByteArray& data);
+    void playMono16Sound(const char* path);
+    bool tryCaptureSamples(int16_t *buf, int samples);
+
+    static void playAudioBuffer(ALuint alSource, const int16_t *data, int samples, unsigned channels, int sampleRate);
+
+    static void playGroupAudioQueued(void *, int group, int peer, const int16_t* data,
                         unsigned samples, uint8_t channels, unsigned sample_rate, void*);
 
 #ifdef QTOX_FILTER_AUDIO
@@ -77,24 +93,33 @@ public:
 #endif
 
 public slots:
-    /// Must be called from the audio thread, plays a group call's received audio
+    void closeInput();
+    void closeOutput();
     void playGroupAudio(int group, int peer, const int16_t* data,
                         unsigned samples, uint8_t channels, unsigned sample_rate);
 
+signals:
+    void groupAudioPlayed(int group, int peer, unsigned short volume);
+
 private:
-    explicit Audio()=default;
+    Audio();
     ~Audio();
-    static void playAudioBuffer(ALuint alSource, const int16_t *data, int samples, unsigned channels, int sampleRate);
 
 private:
     static Audio* instance;
-    static std::atomic<int> userCount;
-    static ALCdevice* alOutDev, *alInDev;
-    static QMutex* audioInLock, *audioOutLock;
-    static float outputVolume;
-    static ALuint alMainSource;
-    static QThread* audioThread;
-    static ALCcontext* alContext;
+
+private:
+    QThread*            audioThread;
+    QMutex              audioInLock;
+    QMutex              audioOutLock;
+    std::atomic<int>    inputSubscriptions;
+    ALCdevice*          alOutDev;
+    ALCdevice*          alInDev;
+    qreal               outputVolume;
+    qreal               inputVolume;
+    ALuint              alMainSource;
+    ALCcontext*         alContext;
+    QTimer*             timer;
 };
 
 #endif // AUDIO_H

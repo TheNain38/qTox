@@ -43,7 +43,8 @@
 #endif
 
 #ifdef LOG_TO_FILE
-static QTextStream* logFile {nullptr};
+static std::unique_ptr<QTextStream> logFileStream {nullptr};
+static std::unique_ptr<QFile> logFileFile {nullptr};
 static QMutex mutex;
 #endif
 
@@ -70,6 +71,8 @@ void logMessageHandler(QtMsgType type, const QMessageLogContext& ctxt, const QSt
         case QtFatalMsg:
             LogMsg += "Fatal";
             break;
+        default:
+            break;
     }
 
     LogMsg += ": " + msg + "\n";
@@ -78,12 +81,12 @@ void logMessageHandler(QtMsgType type, const QMessageLogContext& ctxt, const QSt
     out << LogMsg;
 
 #ifdef LOG_TO_FILE
-    if (!logFile)
+    if (!logFileStream)
         return;
 
     QMutexLocker locker(&mutex);
-    *logFile << LogMsg;
-    logFile->flush();
+    *logFileStream << LogMsg;
+    logFileStream->flush();
 #endif
 }
 
@@ -113,24 +116,23 @@ int main(int argc, char *argv[])
     parser.process(a);
 
 #ifndef Q_OS_ANDROID
-    IPC::getInstance();
+    IPC& ipc = IPC::getInstance();
 #endif
 
     sodium_init(); // For the auto-updater
 
 #ifdef LOG_TO_FILE
-    logFile = new QTextStream;
-    QFile logfile(Settings::getInstance().getSettingsDirPath()+"qtox.log");
-    if (logfile.open(QIODevice::Append))
+    logFileStream.reset(new QTextStream);
+    logFileFile.reset(new QFile(Settings::getInstance().getSettingsDirPath()+"qtox.log"));
+    if (logFileFile->open(QIODevice::Append))
     {
-        logFile->setDevice(&logfile);
-        *logFile << QDateTime::currentDateTime().toString("\nyyyy-MM-dd HH:mm:ss' file logger starting\n'");
+        logFileStream->setDevice(logFileFile.get());
+        *logFileStream << QDateTime::currentDateTime().toString("\nyyyy-MM-dd HH:mm:ss' file logger starting\n'");
     }
     else
     {
         qWarning() << "Couldn't open log file!\n";
-        delete logFile;
-        logFile = nullptr;
+        logFileStream.release();
     }
 #endif
 
@@ -157,7 +159,6 @@ int main(int argc, char *argv[])
 
 #ifndef Q_OS_ANDROID
     // Inter-process communication
-    IPC& ipc = IPC::getInstance();
     ipc.registerEventHandler("uri", &toxURIEventHandler);
     ipc.registerEventHandler("save", &toxSaveEventHandler);
     ipc.registerEventHandler("activate", &toxActivateEventHandler);
@@ -233,15 +234,10 @@ int main(int argc, char *argv[])
     }
     else if (!ipc.isCurrentOwner() && !parser.isSet("p"))
     {
-        uint32_t dest = 0;
-        if (parser.isSet("p"))
-            dest = Settings::getInstance().getCurrentProfileId();
-
-        time_t event = ipc.postEvent("activate", QByteArray(), dest);
-        if (ipc.waitUntilAccepted(event, 2))
+        time_t event = ipc.postEvent("activate");
+        if (!ipc.waitUntilAccepted(event, 2))
         {
-            if (!ipc.isCurrentOwner())
-                return EXIT_SUCCESS;
+            return EXIT_SUCCESS;
         }
     }
 #endif
@@ -264,12 +260,11 @@ int main(int argc, char *argv[])
     int errorcode = a.exec();
 
 #ifdef LOG_TO_FILE
-    delete logFile;
-    logFile = nullptr;
+    logFileStream.release();
 #endif
 
-    CameraSource::destroyInstance();
     Nexus::destroyInstance();
+    CameraSource::destroyInstance();
     Settings::destroyInstance();
     qDebug() << "Clean exit with status"<<errorcode;
     return errorcode;

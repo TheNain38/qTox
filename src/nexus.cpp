@@ -21,9 +21,11 @@
 #include "nexus.h"
 #include "src/persistence/profile.h"
 #include "src/core/core.h"
+#include "src/core/coreav.h"
 #include "persistence/settings.h"
 #include "video/camerasource.h"
 #include "widget/gui.h"
+#include "widget/style.h"
 #include "widget/loginscreen.h"
 #include <QThread>
 #include <QDebug>
@@ -31,6 +33,7 @@
 #include <QFile>
 #include <QApplication>
 #include <cassert>
+#include <vpx/vpx_image.h>
 
 #ifdef Q_OS_ANDROID
 #include <src/widget/androidgui.h>
@@ -45,6 +48,8 @@
 #include <QActionGroup>
 #include <QSignalMapper>
 #endif
+
+Q_DECLARE_OPAQUE_POINTER(ToxAV*)
 
 static Nexus* nexus{nullptr};
 
@@ -87,11 +92,13 @@ void Nexus::start()
     qRegisterMetaType<int64_t>("int64_t");
     qRegisterMetaType<QPixmap>("QPixmap");
     qRegisterMetaType<Profile*>("Profile*");
+    qRegisterMetaType<ToxAV*>("ToxAV*");
     qRegisterMetaType<ToxFile>("ToxFile");
     qRegisterMetaType<ToxFile::FileDirection>("ToxFile::FileDirection");
     qRegisterMetaType<std::shared_ptr<VideoFrame>>("std::shared_ptr<VideoFrame>");
 
     loginScreen = new LoginScreen();
+    loginScreen->setStyleSheet(Style::getStylesheet(":/ui/loginScreen/loginScreen.css"));
 
 #ifdef Q_OS_MAC
     globalMenuBar = new QMenuBar(0);
@@ -224,7 +231,6 @@ void Nexus::showMainGUI()
     connect(core, &Core::groupTitleChanged,          widget, &Widget::onGroupTitleChanged);
     connect(core, &Core::groupPeerAudioPlaying,      widget, &Widget::onGroupPeerAudioPlaying);
     connect(core, &Core::emptyGroupCreated, widget, &Widget::onEmptyGroupCreated);
-    connect(core, &Core::avInvite, widget, &Widget::playRingtone);
     connect(core, &Core::friendTypingChanged, widget, &Widget::onFriendTypingChanged);
 
     connect(core, &Core::messageSentResult, widget, &Widget::onMessageSendResult);
@@ -368,7 +374,7 @@ void Nexus::updateWindowsArg(QWindow* closedWindow)
         dockMenu->insertAction(dockLast, action);
     }
 
-    if (!dockLast->isSeparator())
+    if (dockLast && !dockLast->isSeparator())
         dockMenu->insertSeparator(dockLast);
 }
 

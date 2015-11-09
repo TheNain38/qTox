@@ -22,6 +22,7 @@
 #include "src/nexus.h"
 #include "src/core/cdata.h"
 #include "src/core/cstring.h"
+#include "src/core/coreav.h"
 #include "src/persistence/settings.h"
 #include "src/widget/gui.h"
 #include "src/persistence/historykeeper.h"
@@ -33,6 +34,7 @@
 #include "src/video/camerasource.h"
 
 #include <tox/tox.h>
+#include <tox/toxav.h>
 
 #include <ctime>
 #include <cassert>
@@ -54,46 +56,31 @@
 
 const QString Core::CONFIG_FILE_NAME = "data";
 const QString Core::TOX_EXT = ".tox";
-QHash<int, ToxGroupCall> Core::groupCalls;
 QThread* Core::coreThread{nullptr};
 
 #define MAX_GROUP_MESSAGE_LEN 1024
 
 Core::Core(QThread *CoreThread, Profile& profile) :
-    tox(nullptr), toxav(nullptr), profile(profile), ready{false}
+    tox(nullptr), av(nullptr), profile(profile), ready{false}
 {
     coreThread = CoreThread;
 
     Audio::getInstance();
 
-    videobuf = nullptr;
 
     toxTimer = new QTimer(this);
     toxTimer->setSingleShot(true);
     connect(toxTimer, &QTimer::timeout, this, &Core::process);
     connect(&Settings::getInstance(), &Settings::dhtServerListChanged, this, &Core::process);
 
-    for (int i=0; i<TOXAV_MAX_CALLS;i++)
-    {
-        calls[i].active = false;
-        calls[i].alSource = 0;
-        calls[i].sendAudioTimer = new QTimer();
-        calls[i].sendAudioTimer->moveToThread(coreThread);
-    }
-
-    // OpenAL init
-    QString outDevDescr = Settings::getInstance().getOutDev();
-    Audio::openOutput(outDevDescr);
-    QString inDevDescr = Settings::getInstance().getInDev();
-    Audio::openInput(inDevDescr);
 }
 
 void Core::deadifyTox()
 {
-    if (toxav)
+    if (av)
     {
-        toxav_kill(toxav);
-        toxav = nullptr;
+        delete av;
+        av = nullptr;
     }
     if (tox)
     {
@@ -119,25 +106,21 @@ Core::~Core()
         coreThread->wait(500);
     }
 
-    for (ToxCall call : calls)
-    {
-        if (!call.active)
-            continue;
-        hangupCall(call.callId);
-    }
-
     deadifyTox();
 
-    delete[] videobuf;
-    videobuf=nullptr;
-
-    Audio::closeInput();
-    Audio::closeOutput();
+    Audio& audio = Audio::getInstance();
+    audio.closeInput();
+    audio.closeOutput();
 }
 
 Core* Core::getInstance()
 {
     return Nexus::getCore();
+}
+
+CoreAV *Core::getAv()
+{
+    return av;
 }
 
 void Core::makeTox(QByteArray savedata)
@@ -238,8 +221,8 @@ void Core::makeTox(QByteArray savedata)
             return;
     }
 
-    toxav = toxav_new(tox, TOXAV_MAX_CALLS);
-    if (toxav == nullptr)
+    av = new CoreAV(tox);
+    if (av->getToxAv() == nullptr)
     {
         qCritical() << "Toxav core failed to start";
         emit failedToStart();
@@ -292,7 +275,7 @@ void Core::start()
         emit idSet(id);
 
     // tox core is already decrypted
-    if (Settings::getInstance().getEnableLogging() && Nexus::getProfile()->isEncrypted())
+    if (Nexus::getProfile()->isEncrypted())
         checkEncryptedHistory();
 
     loadFriends();
@@ -315,20 +298,7 @@ void Core::start()
     tox_callback_file_recv_chunk(tox, CoreFile::onFileRecvChunkCallback, this);
     tox_callback_file_recv_control(tox, CoreFile::onFileControlCallback, this);
 
-    toxav_register_callstate_callback(toxav, onAvInvite, av_OnInvite, this);
-    toxav_register_callstate_callback(toxav, onAvStart, av_OnStart, this);
-    toxav_register_callstate_callback(toxav, onAvCancel, av_OnCancel, this);
-    toxav_register_callstate_callback(toxav, onAvReject, av_OnReject, this);
-    toxav_register_callstate_callback(toxav, onAvEnd, av_OnEnd, this);
-    toxav_register_callstate_callback(toxav, onAvRinging, av_OnRinging, this);
-    toxav_register_callstate_callback(toxav, onAvMediaChange, av_OnPeerCSChange, this);
-    toxav_register_callstate_callback(toxav, onAvMediaChange, av_OnSelfCSChange, this);
-    toxav_register_callstate_callback(toxav, onAvRequestTimeout, av_OnRequestTimeout, this);
-    toxav_register_callstate_callback(toxav, onAvPeerTimeout, av_OnPeerTimeout, this);
-
-    toxav_register_audio_callback(toxav, playCallAudio, this);
-    toxav_register_video_callback(toxav, playCallVideo, this);
-
+    HistoryKeeper::getInstance()->importAvatarToDatabase(getSelfId().toString().left(64));
     QPixmap pic = Settings::getInstance().getSavedAvatar(getSelfId().toString());
     if (!pic.isNull() && !pic.size().isEmpty())
     {
@@ -341,7 +311,8 @@ void Core::start()
     }
     else
     {
-        qDebug() << "Self avatar not found";
+        qDebug() << "Self avatar not found, will broadcast empty avatar to friends";
+        setAvatar({});
     }
 
     ready = true;
@@ -359,6 +330,7 @@ void Core::start()
         GUI::setEnabled(true);
 
     process(); // starts its own timer
+    av->start();
 }
 
 /* Using the now commented out statements in checkConnection(), I watched how
@@ -373,11 +345,13 @@ void Core::start()
 void Core::process()
 {
     if (!isReady())
+    {
+        av->stop();
         return;
+    }
 
     static int tolerance = CORE_DISCONNECT_TOLERANCE;
     tox_iterate(tox);
-    toxav_do(toxav);
 
 #ifdef DEBUG
     //we want to see the debug messages immediately
@@ -394,8 +368,7 @@ void Core::process()
         tolerance = 3*CORE_DISCONNECT_TOLERANCE;
     }
 
-    unsigned sleeptime = qMin(tox_iteration_interval(tox), toxav_do_interval(toxav));
-    sleeptime = qMin(sleeptime, CoreFile::corefileIterationInterval());
+    unsigned sleeptime = qMin(tox_iteration_interval(tox), CoreFile::corefileIterationInterval());
     toxTimer->start(sleeptime);
 }
 
@@ -756,9 +729,7 @@ void Core::removeGroup(int groupId, bool fake)
         return;
 
     tox_del_groupchat(tox, groupId);
-
-    if (groupCalls[groupId].active)
-        leaveGroupCall(groupId);
+    av->leaveGroupCall(groupId);
 }
 
 QString Core::getUsername() const
@@ -792,10 +763,17 @@ void Core::setUsername(const QString& username)
 
 void Core::setAvatar(const QByteArray& data)
 {
-    QPixmap pic;
-    pic.loadFromData(data);
-    Settings::getInstance().saveAvatar(pic, getSelfId().toString());
-    emit selfAvatarChanged(pic);
+    if (!data.isEmpty())
+    {
+        QPixmap pic;
+        pic.loadFromData(data);
+        Settings::getInstance().saveAvatar(pic, getSelfId().toString());
+        emit selfAvatarChanged(pic);
+    }
+    else
+    {
+        emit selfAvatarChanged(QPixmap(":/img/contact_dark.svg"));
+    }
 
     AvatarBroadcaster::setAvatar(data);
     AvatarBroadcaster::enableAutoBroadcast();
@@ -1074,11 +1052,6 @@ void Core::createGroup(uint8_t type)
     }
 }
 
-bool Core::isGroupAvEnabled(int groupId)
-{
-    return tox_group_get_type(tox, groupId) == TOX_GROUPCHAT_TYPE_AV;
-}
-
 bool Core::isFriendOnline(uint32_t friendId) const
 {
     return tox_friend_get_connection_status(tox, friendId, nullptr) != TOX_CONNECTION_NONE;
@@ -1221,7 +1194,7 @@ QString Core::getPeerName(const ToxId& id) const
 
 bool Core::isReady()
 {
-    return toxav && tox && ready;
+    return av && av->getToxAv() && tox && ready;
 }
 
 void Core::setNospam(uint32_t nospam)
@@ -1231,31 +1204,10 @@ void Core::setNospam(uint32_t nospam)
     tox_self_set_nospam(tox, nospam);
 }
 
-void Core::resetCallSources()
-{
-    for (ToxGroupCall& call : groupCalls)
-    {
-        for (ALuint source : call.alSources)
-            alDeleteSources(1, &source);
-        call.alSources.clear();
-    }
-
-    for (ToxCall& call : calls)
-    {
-        if (call.active && call.alSource)
-        {
-            ALuint tmp = call.alSource;
-            call.alSource = 0;
-            alDeleteSources(1, &tmp);
-
-            alGenSources(1, &call.alSource);
-        }
-    }
-}
-
 void Core::killTimers(bool onlyStop)
 {
     assert(QThread::currentThread() == coreThread);
+    av->stop();
     toxTimer->stop();
     if (!onlyStop)
     {

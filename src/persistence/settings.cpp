@@ -26,6 +26,7 @@
 #include "src/widget/gui.h"
 #include "src/persistence/profilelocker.h"
 #include "src/persistence/settingsserializer.h"
+#include "src/persistence/historykeeper.h"
 #include "src/nexus.h"
 #include "src/persistence/profile.h"
 #ifdef QTOX_PLATFORM_EXT
@@ -226,12 +227,15 @@ void Settings::loadGlobal()
     s.beginGroup("Audio");
         inDev = s.value("inDev", "").toString();
         outDev = s.value("outDev", "").toString();
+        inVolume = s.value("inVolume", 100).toInt();
+        outVolume = s.value("outVolume", 100).toInt();
         filterAudio = s.value("filterAudio", false).toBool();
     s.endGroup();
 
     s.beginGroup("Video");
         videoDev = s.value("videoDev", "").toString();
         camVideoRes = s.value("camVideoRes",QSize()).toSize();
+        camVideoFPS = s.value("camVideoFPS", 0).toUInt();
     s.endGroup();
 
     // Read the embedded DHT bootsrap nodes list if needed
@@ -285,6 +289,12 @@ void Settings::loadPersonnal(Profile* profile)
     SettingsSerializer ps(filePath, profile->getPassword());
     ps.load();
     friendLst.clear();
+
+    ps.beginGroup("Privacy");
+        typingNotification = ps.value("typingNotification", true).toBool();
+        enableLogging = ps.value("enableLogging", true).toBool();
+    ps.endGroup();
+
     ps.beginGroup("Friends");
         int size = ps.beginReadArray("Friend");
         friendLst.reserve(size);
@@ -322,11 +332,6 @@ void Settings::loadPersonnal(Profile* profile)
             circleLst.push_back(cp);
         }
         ps.endArray();
-    ps.endGroup();
-
-    ps.beginGroup("Privacy");
-        typingNotification = ps.value("typingNotification", true).toBool();
-        enableLogging = ps.value("enableLogging", true).toBool();
     ps.endGroup();
 }
 
@@ -425,12 +430,15 @@ void Settings::saveGlobal()
     s.beginGroup("Audio");
         s.setValue("inDev", inDev);
         s.setValue("outDev", outDev);
+        s.setValue("inVolume", inVolume);
+        s.setValue("outVolume", outVolume);
         s.setValue("filterAudio", filterAudio);
     s.endGroup();
 
     s.beginGroup("Video");
         s.setValue("videoDev", videoDev);
         s.setValue("camVideoRes",camVideoRes);
+        s.setValue("camVideoFPS",camVideoFPS);
     s.endGroup();
 }
 
@@ -531,59 +539,22 @@ QString Settings::getSettingsDirPath()
 
 QPixmap Settings::getSavedAvatar(const QString &ownerId)
 {
-    QDir dir(getSettingsDirPath());
-    QString filePath = dir.filePath("avatars/"+ownerId.left(64)+".png");
-    QFileInfo info(filePath);
-    QPixmap pic;
-    if (!info.exists())
-    {
-        QString filePath = dir.filePath("avatar_"+ownerId.left(64));
-        if (!QFileInfo(filePath).exists()) // try without truncation, for old self avatars
-            filePath = dir.filePath("avatar_"+ownerId);
-
-        pic.load(filePath);
-        saveAvatar(pic, ownerId);
-        QFile::remove(filePath);
-    }
-    else
-    {
-        pic.load(filePath);
-    }
-    return pic;
+    return HistoryKeeper::getInstance()->getSavedAvatar(ownerId);
 }
 
 void Settings::saveAvatar(QPixmap& pic, const QString& ownerId)
 {
-    QDir dir(getSettingsDirPath());
-    dir.mkdir("avatars/");
-    // ignore nospam (good idea, and also the addFriend funcs which call getAvatar don't have it)
-    QString filePath = dir.filePath("avatars/"+ownerId.left(64)+".png");
-    pic.save(filePath, "png");
+    HistoryKeeper::getInstance()->saveAvatar(pic,ownerId);
 }
 
 void Settings::saveAvatarHash(const QByteArray& hash, const QString& ownerId)
 {
-    QDir dir(getSettingsDirPath());
-    dir.mkdir("avatars/");
-    QFile file(dir.filePath("avatars/"+ownerId.left(64)+".hash"));
-    if (!file.open(QIODevice::WriteOnly))
-        return;
-
-    file.write(hash);
-    file.close();
+    HistoryKeeper::getInstance()->saveAvatarHash(hash,ownerId);
 }
 
 QByteArray Settings::getAvatarHash(const QString& ownerId)
 {
-    QDir dir(getSettingsDirPath());
-    dir.mkdir("avatars/");
-    QFile file(dir.filePath("avatars/"+ownerId.left(64)+".hash"));
-    if (!file.open(QIODevice::ReadOnly))
-        return QByteArray();
-
-    QByteArray out = file.readAll();
-    file.close();
-    return out;
+    return HistoryKeeper::getInstance()->getAvatarHash(ownerId);
 }
 
 const QList<DhtServer>& Settings::getDhtServerList() const
@@ -1172,6 +1143,18 @@ void Settings::setInDev(const QString& deviceSpecifier)
     inDev = deviceSpecifier;
 }
 
+int Settings::getInVolume() const
+{
+    QMutexLocker locker{&bigLock};
+    return inVolume;
+}
+
+void Settings::setInVolume(int volume)
+{
+    QMutexLocker locker{&bigLock};
+    inVolume = volume;
+}
+
 QString Settings::getVideoDev() const
 {
     QMutexLocker locker{&bigLock};
@@ -1196,6 +1179,18 @@ void Settings::setOutDev(const QString& deviceSpecifier)
     outDev = deviceSpecifier;
 }
 
+int Settings::getOutVolume() const
+{
+    QMutexLocker locker{&bigLock};
+    return outVolume;
+}
+
+void Settings::setOutVolume(int volume)
+{
+    QMutexLocker locker{&bigLock};
+    outVolume = volume;
+}
+
 bool Settings::getFilterAudio() const
 {
     QMutexLocker locker{&bigLock};
@@ -1218,6 +1213,18 @@ void Settings::setCamVideoRes(QSize newValue)
 {
     QMutexLocker locker{&bigLock};
     camVideoRes = newValue;
+}
+
+unsigned short Settings::getCamVideoFPS() const
+{
+    QMutexLocker locker{&bigLock};
+    return camVideoFPS;
+}
+
+void Settings::setCamVideoFPS(unsigned short newValue)
+{
+    QMutexLocker locker{&bigLock};
+    camVideoFPS = newValue;
 }
 
 QString Settings::getFriendAdress(const QString &publicKey) const

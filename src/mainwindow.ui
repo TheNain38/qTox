@@ -858,6 +858,9 @@ QSplitter:handle{
                  <property name="cursor">
                   <cursorShape>PointingHandCursor</cursorShape>
                  </property>
+                 <property name="text">
+                  <string>Your name</string>
+                 </property>
                  <property name="textFormat">
                   <enum>Qt::PlainText</enum>
                  </property>
@@ -939,6 +942,9 @@ QSplitter:handle{
                   <font>
                    <pointsize>8</pointsize>
                   </font>
+                 </property>
+                 <property name="text">
+                  <string>Your status</string>
                  </property>
                  <property name="textFormat">
                   <enum>Qt::PlainText</enum>
@@ -1027,6 +1033,9 @@ QSplitter:handle{
                  <verstretch>0</verstretch>
                 </sizepolicy>
                </property>
+               <property name="clearButtonEnabled">
+                <bool>true</bool>
+               </property>
               </widget>
              </item>
              <item>
@@ -1084,8 +1093,8 @@ QSplitter:handle{
             <rect>
              <x>0</x>
              <y>0</y>
-             <width>284</width>
-             <height>398</height>
+             <width>775</width>
+             <height>284</height>
             </rect>
            </property>
            <layout class="QVBoxLayout" name="verticalLayout_5"/>

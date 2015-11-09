@@ -45,6 +45,7 @@ struct AVCodecContext;
 class CameraSource : public VideoSource
 {
     Q_OBJECT
+
 public:
     static CameraSource& getInstance();
     static void destroyInstance();
@@ -54,10 +55,14 @@ public:
     void open(const QString deviceName);
     void open(const QString deviceName, VideoMode mode);
     void close(); ///< Equivalent to opening the source with the video device "none". Stops streaming.
+    bool isOpen();
 
     // VideoSource interface
     virtual bool subscribe() override;
     virtual void unsubscribe() override;
+
+signals:
+    void deviceOpened();
 
 private:
     CameraSource();
@@ -86,8 +91,9 @@ private:
     VideoMode mode; ///< What mode we tried to open the device in, all zeros means default mode
     AVCodecContext* cctx, *cctxOrig; ///< Codec context of the camera's selected video stream
     int videoStreamIndex; ///< A camera can have multiple streams, this is the one we're decoding
-    std::atomic_bool biglock, freelistLock; ///< True when locked. Faster than mutexes for video decoding.
-    std::atomic_bool isOpen;
+    QMutex biglock, freelistLock; ///< True when locked. Faster than mutexes for video decoding.
+    std::atomic_bool _isOpen;
+    std::atomic_bool streamBlocker; ///< Holds the streaming thread still when true
     std::atomic_int subscriptions; ///< Remember how many times we subscribed for RAII
 
     static CameraSource* instance;
